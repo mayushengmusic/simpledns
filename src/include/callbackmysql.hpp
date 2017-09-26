@@ -1,0 +1,215 @@
+//
+// Created by jaken on 17-5-1.
+//
+
+#include <set>
+#include "udp_client.hpp"
+#include "mysqlconnectorc.hpp"
+#include "parseconfig.hpp"
+#ifndef SIMPLEDNS_CALLBACKMYSQL_HPP
+#define SIMPLEDNS_CALLBACKMYSQL_HPP
+
+namespace dns{
+    class connectwithmysql{
+    public:
+        connectwithmysql();
+        bool checkdata(const std::string & domin) ;
+        std::string getipv4(const std::string & domin) ;
+        ~connectwithmysql();
+
+    private:
+        dns::mysqlconnector *connectorptr;
+        std::set<std::string> dominset;
+        static std::string mysqlurl;
+        static std::string mysqluser;
+        static std::string mysqlpasswd;
+    };
+}
+
+std::string dns::connectwithmysql::mysqlurl=config_["mysqlurl"];
+std::string dns::connectwithmysql::mysqluser=config_["mysqluser"];
+std::string dns::connectwithmysql::mysqlpasswd=config_["mysqlpasswd"];
+
+
+dns::connectwithmysql::connectwithmysql():dominset() {
+    connectorptr=new dns::mysqlconnector(mysqlurl,mysqluser,mysqlpasswd);
+    const std::list<std::string> *listptr=connectorptr->excSQLAndGetData("select domin from device","domin");
+    if(listptr!=NULL)
+    for(auto & x: *listptr)
+    {
+
+        dominset.insert(x);
+    }
+    delete connectorptr;
+    connectorptr=NULL;
+
+}
+
+dns::connectwithmysql::~connectwithmysql() {
+    if(connectorptr!=NULL)
+        delete connectorptr;
+}
+
+bool dns::connectwithmysql::checkdata(const std::string &domin)  {
+
+
+
+    if(dominset.find(domin)==dominset.end()) {
+
+        return false;
+    }
+
+    connectorptr=new dns::mysqlconnector(mysqlurl,mysqluser,mysqlpasswd);
+    std::string SQL = "select online from device where domin = \"";
+    SQL+=domin;
+    SQL+="\"";
+    const std::list<std::string> * listptr=connectorptr->excSQLAndGetData(SQL,"online");
+
+
+    while(listptr==NULL)
+    {
+        sleep(3);
+        delete connectorptr;
+        std::cerr<<"database connect break try to connect again\n";
+        connectorptr=new dns::mysqlconnector(mysqlurl,mysqluser,mysqlpasswd);
+
+        listptr=connectorptr->excSQLAndGetData(SQL,"online");
+    }
+
+    delete connectorptr;
+    connectorptr=NULL;
+
+    if(listptr->size()!=1)
+    {
+        std::cerr<<"please check the database\n";
+        return false;
+    }
+
+    static char Asci1[2];
+    Asci1[0]=1;
+    Asci1[1]='\0';
+    static std::string cmp(Asci1);
+
+    return *(listptr->begin())==cmp;
+}
+
+std::string dns::connectwithmysql::getipv4(const std::string &domin) {
+    connectorptr=new dns::mysqlconnector(mysqlurl,mysqluser,mysqlpasswd);
+    std::string SQL = "select ipv4 from device where domin = \"";
+    SQL+=domin;
+    SQL+="\"";
+    const std::list<std::string> * listptr=connectorptr->excSQLAndGetData(SQL,"ipv4");
+    while(listptr==NULL)
+    {
+        sleep(3);
+        delete connectorptr;
+        std::cerr<<"database connect break try to connect again\n";
+        connectorptr=new dns::mysqlconnector(mysqlurl,mysqluser,mysqlpasswd);
+
+        listptr=connectorptr->excSQLAndGetData(SQL,"online");
+    }
+
+    delete connectorptr;
+    connectorptr=NULL;
+
+    if(listptr->size()!=1)
+    {
+        std::cerr<<"please check the database\n";
+        return "";
+    }
+
+    return *(listptr->begin());
+
+}
+
+
+void translatequerywithmysql(char *MessageCome,char *MessageBack,unsigned int MessageCome_lenth,unsigned int *MessageBack_lenth)
+{
+    dns::Message querymessage;
+    static dns::connectwithmysql mysqlworker;
+    static std::string ipaddress;
+    bool ipaddressnotempty=false;
+
+    querymessage.decode(MessageCome,(const unsigned int)MessageCome_lenth);
+
+    /*
+    std::cout<<"*******************************************\n";
+    std::cout<<querymessage.asString()<<std::endl;
+    std::cout<<"*******************************************\n";
+    */
+
+    if(querymessage.getQdCount()==1)
+    {
+        std::vector<dns::QuerySection*>::const_iterator it = querymessage.getmQueries().begin();
+        static std::string question;
+        question=(*it)->getName();
+
+
+       ipaddressnotempty=mysqlworker.checkdata(question);
+        if(ipaddressnotempty)
+            ipaddress=mysqlworker.getipv4(question);
+
+    }
+
+
+    if(ipaddressnotempty)
+    {
+
+        querymessage.setQr(dns::Message::typeResponse);
+        dns::ResourceRecord *rrA = new dns::ResourceRecord();
+        rrA->setType(dns::RDATA_A);
+        rrA->setClass(dns::CLASS_IN);
+        rrA->setTtl(60);
+        dns::RDataA *rdataA = new dns::RDataA();
+        dns::uchar ip4[4] ={};
+        std::stringstream oss;
+        oss.str("");
+        oss.clear();
+        static std::regex r("([\\d]+)\\.([\\d]+)\\.([\\d]+)\\.([\\d]+)");
+        static std::smatch m;
+
+        std::regex_match(ipaddress,m,r);
+
+        unsigned int temp=0;
+
+        oss<<m[1]<<" "<<m[2]<<" "<<m[3]<<" "<<m[4];
+
+
+        oss>>temp;
+        ip4[0]=(dns::uchar)temp;
+
+        oss>>temp;
+        ip4[1]=(dns::uchar)temp;
+
+        oss>>temp;
+        ip4[2]=(dns::uchar)temp;
+
+        oss>>temp;
+        ip4[3]=(dns::uchar)temp;
+
+        rdataA->setAddress(ip4);
+        rrA->setRData(rdataA);
+        rrA->setTtl(0);
+        querymessage.addAnswer(rrA);
+        querymessage.encode(MessageBack,dns::udp_server::BUF_SIZE,*MessageBack_lenth);
+    }
+    else {
+
+        static dns::udp_client queryclient(config_["forwarddns"].c_str());
+        ssize_t length = queryclient.querydns(MessageCome, MessageCome_lenth, MessageBack);
+        *MessageBack_lenth=(unsigned int)length;
+    }
+
+    dns::Message response;
+    response.decode(MessageBack,*MessageBack_lenth);
+    /*
+    std::cout<<"*******************************************\n";
+    std::cout<<response.asString()<<std::endl;
+    std::cout<<"*******************************************\n";
+    */
+
+}
+
+
+
+#endif //SIMPLEDNS_CALLBACKMYSQL_HPP
