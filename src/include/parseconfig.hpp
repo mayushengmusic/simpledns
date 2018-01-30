@@ -62,7 +62,7 @@ const std::string& dns::parseconfig::operator[](std::string &&index){
     return configdata[index];
 }
 
-dns::parseconfig config_("/etc/config.conf");
+dns::parseconfig config_("/etc/simpledns.conf");
 
 
 

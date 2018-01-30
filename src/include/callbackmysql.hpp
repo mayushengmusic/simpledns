@@ -23,22 +23,24 @@ namespace dns{
         static std::string mysqlurl;
         static std::string mysqluser;
         static std::string mysqlpasswd;
+        static std::string basedomin;
     };
 }
 
 std::string dns::connectwithmysql::mysqlurl=config_["mysqlurl"];
 std::string dns::connectwithmysql::mysqluser=config_["mysqluser"];
 std::string dns::connectwithmysql::mysqlpasswd=config_["mysqlpasswd"];
+std::string dns::connectwithmysql::basedomin=config_["base"];
 
 
 dns::connectwithmysql::connectwithmysql():dominset() {
     connectorptr=new dns::mysqlconnector(mysqlurl,mysqluser,mysqlpasswd);
-    const std::list<std::string> *listptr=connectorptr->excSQLAndGetData("select domin from device","domin");
+    const std::list<std::string> *listptr=connectorptr->excSQLAndGetData("select username from radcheck","username");
     if(listptr!=NULL)
     for(auto & x: *listptr)
     {
-
-        dominset.insert(x);
+        static const std::string zero(".");
+        dominset.insert(x+zero+basedomin);
     }
     delete connectorptr;
     connectorptr=NULL;
@@ -59,11 +61,25 @@ bool dns::connectwithmysql::checkdata(const std::string &domin)  {
         return false;
     }
 
+    int sub_len;
+    for(int i=0;i<domin.length();++i)
+    {
+        if(domin[i]=='.') {
+            sub_len = i;
+            break;
+        }
+    }
+
+
+
+
     connectorptr=new dns::mysqlconnector(mysqlurl,mysqluser,mysqlpasswd);
-    std::string SQL = "select online from device where domin = \"";
-    SQL+=domin;
+    std::string SQL = "select acctstoptime from radacct where username=\"";
+    SQL+=domin.substr(0,sub_len);
     SQL+="\"";
-    const std::list<std::string> * listptr=connectorptr->excSQLAndGetData(SQL,"online");
+    SQL+=" order by acctstarttime desc limit 1;";
+
+    const std::list<std::string> * listptr=connectorptr->excSQLAndGetData(SQL,"acctstoptime");
 
 
     while(listptr==NULL)
@@ -73,32 +89,39 @@ bool dns::connectwithmysql::checkdata(const std::string &domin)  {
         std::cerr<<"database connect break try to connect again\n";
         connectorptr=new dns::mysqlconnector(mysqlurl,mysqluser,mysqlpasswd);
 
-        listptr=connectorptr->excSQLAndGetData(SQL,"online");
+        listptr=connectorptr->excSQLAndGetData(SQL,"acctstoptime");
     }
 
     delete connectorptr;
     connectorptr=NULL;
 
+
     if(listptr->size()!=1)
     {
-        std::cerr<<"please check the database\n";
-        return false;
+        return true;
     }
 
-    static char Asci1[2];
-    Asci1[0]=1;
-    Asci1[1]='\0';
-    static std::string cmp(Asci1);
 
-    return *(listptr->begin())==cmp;
+
+    return false;
 }
 
 std::string dns::connectwithmysql::getipv4(const std::string &domin) {
+    int sub_len;
+    for(int i=0;i<domin.length();++i)
+    {
+        if(domin[i]=='.') {
+            sub_len = i;
+            break;
+        }
+    }
+
     connectorptr=new dns::mysqlconnector(mysqlurl,mysqluser,mysqlpasswd);
-    std::string SQL = "select ipv4 from device where domin = \"";
-    SQL+=domin;
+    std::string SQL = "select callingstationip  from radacct where username = \"";
+    SQL+=domin.substr(0,sub_len);
     SQL+="\"";
-    const std::list<std::string> * listptr=connectorptr->excSQLAndGetData(SQL,"ipv4");
+    SQL+=" order by acctstarttime desc limit 1";
+    const std::list<std::string> * listptr=connectorptr->excSQLAndGetData(SQL,"callingstationip");
     while(listptr==NULL)
     {
         sleep(3);
@@ -106,7 +129,7 @@ std::string dns::connectwithmysql::getipv4(const std::string &domin) {
         std::cerr<<"database connect break try to connect again\n";
         connectorptr=new dns::mysqlconnector(mysqlurl,mysqluser,mysqlpasswd);
 
-        listptr=connectorptr->excSQLAndGetData(SQL,"online");
+        listptr=connectorptr->excSQLAndGetData(SQL,"callingstationip");
     }
 
     delete connectorptr;
@@ -145,9 +168,9 @@ void translatequerywithmysql(char *MessageCome,char *MessageBack,unsigned int Me
         question=(*it)->getName();
 
 
-       ipaddressnotempty=mysqlworker.checkdata(question);
+       ipaddressnotempty=mysqlworker.checkdata(question);//
         if(ipaddressnotempty)
-            ipaddress=mysqlworker.getipv4(question);
+            ipaddress=mysqlworker.getipv4(question);//
 
     }
 
